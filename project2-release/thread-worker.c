@@ -17,6 +17,10 @@ static worker_t latest_assigned_id = 0;
 static tcb* queue_head = NULL;
 static tcb* queue_tail = NULL;
 
+static ucontext_t scheduler_context;
+static ucontext_t main_context; 
+static tcb* current = NULL;
+static int scheduler_initialized = 0;
 /* create a new thread */
 int worker_create(worker_t* thread, pthread_attr_t* attr, 
                   void* (*function)(void*), void* arg) {
@@ -35,6 +39,18 @@ int worker_create(worker_t* thread, pthread_attr_t* attr,
   // - make it ready for the execution.
 
   // YOUR CODE HERE
+  // TODO: break up into individual functions. this is bloated.
+  if(!scheduler_initialized) {
+    scheduler_initialized = 1;
+
+    getcontext(&scheduler_context);
+    scheduler_context.uc_link = NULL;
+    scheduler_context.uc_stack.ss_sp = malloc(SIGSTKSZ);
+    scheduler_context.uc_stack.ss_size = SIGSTKSZ;
+    scheduler_context.uc_stack.ss_flags = 0;
+
+    makecontext(&scheduler_context, run_scheduler, 0);
+  }
 
   // - create Thread Control Block (TCB)
   
@@ -224,7 +240,7 @@ void print_app_stats(void) {
 
 // YOUR CODE HERE
 
-void enqueue(tcb *thread) {
+static void enqueue(tcb *thread) {
   thread->next = NULL;
   if(queue_head == NULL) {
     queue_head = thread;
@@ -235,7 +251,7 @@ void enqueue(tcb *thread) {
   }
 }
 
-tcb* dequeue() {
+static tcb* dequeue() {
   if(queue_head == NULL) {
     return NULL;
   } 
@@ -248,6 +264,19 @@ tcb* dequeue() {
   }
 
   return thread;
+  }
+}
+
+static void run_scheduler()  {
+  while(1) {
+    tcb* next = dequeue();
+    if(next == NULL) {
+      swapcontext(&scheduler_context, &main_context);
+    } 
+
+    current = next;
+    current->status = SCHEDULED;
+    swapcontext(&scheduler_context, &current->context);
   }
 }
 

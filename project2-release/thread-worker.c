@@ -50,6 +50,8 @@ int worker_create(worker_t* thread, pthread_attr_t* attr,
     scheduler_context.uc_stack.ss_flags = 0;
 
     makecontext(&scheduler_context, run_scheduler, 0);
+
+    setup_timer();
   }
 
   // - create Thread Control Block (TCB)
@@ -279,4 +281,35 @@ static void run_scheduler()  {
     swapcontext(&scheduler_context, &current->context);
   }
 }
+
+
+// 1.1.5: setup periodic interrupts to invoke scheduler
+
+static void timer_isr() {
+  if(current != NULL) {
+    swapcontext(&(current->context), &(scheduler_context));
+  }
+}
+
+static void setup_timer() {
+  // bind ISR to SIGPROF flag
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa)); 
+  sa.sa_handler = timer_isr;
+  sigaction(SIGPROF, &sa, NULL); 
+
+  struct itimerval timer;
+  
+  // reset to countdown value after each interval
+  timer.it_interval.tv_sec = 0; 
+  timer.it_interval.tv_usec = QUANTUM * 1000;
+
+  // initial timer countdown value 
+  timer.it_value.tv_sec  =  0;
+  timer.it_value.tv_usec = QUANTUM * 1000;
+ 
+  // start timer
+  setitimer(ITIMER_PROF, &timer, NULL);
+} 
+
 

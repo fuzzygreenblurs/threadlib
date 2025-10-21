@@ -102,6 +102,11 @@ int worker_yield() {
 	// - switch from thread context to scheduler context
 
 	// YOUR CODE HERE
+  if(current == NULL) return 0;
+  cur rent->status = READY;
+  enqueue(current);
+
+  swapcontext(&(current->context), &scheduler_context);
 	
 	return 0;
 };
@@ -110,7 +115,11 @@ int worker_yield() {
 void worker_exit(void *value_ptr) {
 	// - de-allocate any dynamic memory created when starting this thread
 
-	// YOUR CODE HERE
+  current->return_val = value_ptr;
+  free(current->stack);            
+  current->status = TERMINATED;
+
+  setcontext(&scheduler_context);
 };
 
 

@@ -31,18 +31,19 @@
 #include <signal.h>
 #include <sys/time.h>
 
-#define READY     0
-#define SCHEDULED 1
-#define BLOCKED   2 
+#define READY      0
+#define SCHEDULED  1
+#define BLOCKED    2 
+#define TERMINATED 3
 
 typedef uint worker_t;
 typedef struct TCB {
-  worker_t thread_id;
-  int status;
-  ucontext_t context;
-  void* stack;
+  worker_t    thread_id;
+  int         status;
+  ucontext_t  context;
+  void*       stack;
   struct TCB* next; 
-
+  void*       return_val;
 } tcb; 
 
 /* mutex struct definition */

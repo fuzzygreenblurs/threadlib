@@ -42,7 +42,9 @@ typedef struct TCB {
   int         status;
   ucontext_t  context;
   void*       stack;
-  struct TCB* next; 
+  struct TCB* runqueue_next; 
+  struct TCB* tracked_next;
+  int         joinable;
   void*       return_val;
 } tcb; 
 

@@ -1,6 +1,6 @@
 // File:	thread-worker.c
-// List all group member's name:
-// username of iLab:
+// List all group member's name: Akhil Sankar 
+// username of iLab: 
 // iLab Server:
 
 #include "thread-worker.h"
@@ -14,8 +14,11 @@ double avg_resp_time=0;
 // INITAILIZE ALL YOUR OTHER VARIABLES HERE
 // YOUR CODE HERE
 static worker_t latest_assigned_id = 0;
-static tcb* queue_head = NULL;
-static tcb* queue_tail = NULL;
+static tcb* runqueue_head = NULL;
+static tcb* runqueue_tail = NULL;
+
+static tcb* tracked_head = NULL;
+static tcb* tracked_tail = NULL;
 
 static ucontext_t scheduler_context;
 static ucontext_t main_context; 
@@ -89,6 +92,7 @@ int worker_create(worker_t* thread, pthread_attr_t* attr,
               (void (*)(void))function,
               1, arg);
               
+  track(worker_tcb);
   enqueue(worker_tcb);
   worker_tcb->status = READY;
   return 0;
@@ -103,7 +107,7 @@ int worker_yield() {
 
 	// YOUR CODE HERE
   if(current == NULL) return 0;
-  cur rent->status = READY;
+  current->status = READY;
   enqueue(current);
 
   swapcontext(&(current->context), &scheduler_context);
@@ -130,9 +134,21 @@ int worker_join(worker_t thread, void **value_ptr) {
 	// - de-allocate any dynamic memory created by the joining thread
   
 	// YOUR CODE HERE
-	return 0;
-};
+  tcb* prev = NULL;
+  tcb* candidate = find_tracked_thread(thread, &prev);
+  if(candidate == NULL) return -1;
 
+  while(candidate->status != TERMINATED) {
+    worker_yield();
+  }
+
+  if(value_ptr != NULL) {
+    *value_ptr = candidate->return_val;
+  }
+
+  untrack(candidate, prev);
+  return 0;
+};
 /* initialize the mutex lock */
 int worker_mutex_init(worker_mutex_t *mutex, 
                           const pthread_mutexattr_t *mutexattr) {
@@ -251,34 +267,48 @@ void print_app_stats(void) {
 
 // YOUR CODE HERE
 
+int worker_detach(worker_t thread) { 
+  tcb* candidate = find_tracked_thread(thread, NULL);
+  if(candidate == NULL) return -1;
+
+  candidate->joinable = 0;
+
+	return 0;
+}
+
 static void enqueue(tcb *thread) {
-  thread->next = NULL;
-  if(queue_head == NULL) {
-    queue_head = thread;
-    queue_tail = queue_head;
+  thread->runqueue_next = NULL;
+  if(runqueue_head == NULL) {
+    runqueue_head = thread;
+    runqueue_tail = runqueue_head;
   } else {
-    queue_tail->next = thread;
-    queue_tail = thread;
+    runqueue_tail->runqueue_next = thread;
+    runqueue_tail = thread;
   }
 }
 
 static tcb* dequeue() {
-  if(queue_head == NULL) {
+  if(runqueue_head == NULL) {
     return NULL;
   } 
 
-  tcb* thread = queue_head;
-  queue_head = thread->next;
+  tcb* thread = runqueue_head;
+  runqueue_head = thread->runqueue_next;
  
-  if(queue_head == NULL) {
-    queue_tail = NULL;
+  if(runqueue_head == NULL) {
+    runqueue_tail = NULL;
   }
 
   return thread;
-  }
 }
 
 static void run_scheduler()  {
+  /*
+  * if no next thread to run, then swap to main
+  * if next thread, swap to that one (next becomes current)
+  * after swapping back, cleanup current thread if in zombie state 
+  */
+
   while(1) {
     tcb* next = dequeue();
     if(next == NULL) {
@@ -288,6 +318,18 @@ static void run_scheduler()  {
     current = next;
     current->status = SCHEDULED;
     swapcontext(&scheduler_context, &current->context);
+
+    if(current != NULL && 
+       current->status == TERMINATED && 
+       current->joinable == 0) {
+      
+      tcb* prev;
+      tcb* zombie = find_tracked_thread(current->thread_id,&prev);
+      if(zombie) {
+        untrack(zombie, prev);
+        current = NULL;
+      }
+    }
   }
 }
 
@@ -319,6 +361,60 @@ static void setup_timer() {
  
   // start timer
   setitimer(ITIMER_PROF, &timer, NULL);
-} 
+}
+
+static void track(tcb* thread) {
+  thread->joinable = 1;
+  if(tracked_head == NULL) {
+    tracked_head = thread;
+    tracked_tail = tracked_head;
+  } else {
+    tracked_tail->tracked_next = thread;
+    tracked_tail = thread;
+  }
+
+  thread->tracked_next = NULL;  
+}
+
+static void untrack(tcb* thread, tcb* prev) {
+  if(thread == tracked_head) {
+    if(thread->tracked_next == NULL) {
+      tracked_head = NULL;
+      tracked_tail = NULL;
+    } else {
+      tracked_head = thread->tracked_next;
+    }
+  } else if (thread == tracked_tail) {  
+    prev->tracked_next = NULL; 
+    tracked_tail = prev;
+  } else {
+    prev->tracked_next = thread->tracked_next;
+  }
+
+  free(thread);
+}
+
+static tcb* find_tracked_thread(worker_t thread, tcb** prev_tracker) {
+  if(tracked_head == NULL) return NULL;
+
+  tcb* candidate = tracked_head;
+  tcb* prev = NULL;
+
+  do {
+    if(candidate->thread_id == thread) {
+      // optional param prev_tracker can be provided
+      if(prev_tracker != NULL) {
+        *prev_tracker = prev;
+      }
+
+      return candidate;
+    } 
+
+    prev = candidate;
+    candidate = candidate->tracked_next;
+  } while(candidate != NULL);
+
+	return NULL;
+}
 
 

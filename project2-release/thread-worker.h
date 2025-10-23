@@ -53,6 +53,10 @@ typedef struct worker_mutex_t {
 	/* add something here */
 
 	// YOUR CODE HERE
+  int locked;
+  tcb* blocked_head;
+  tcb* blocked_tail;
+
 } worker_mutex_t;
 
 /* define your data structures here: */

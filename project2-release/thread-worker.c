@@ -155,19 +155,35 @@ int worker_mutex_init(worker_mutex_t *mutex,
 	//- initialize data structures for this mutex
 
 	// YOUR CODE HERE
+  mutex->locked = 0;
+  mutex->blocked_head = NULL;
+  mutex->blocked_tail = NULL;
 	return 0;
 };
 
 /* aquire the mutex lock */
 int worker_mutex_lock(worker_mutex_t *mutex) {
+  // - use the built-in test-and-set atomic function to test the mutex
+  // - if the mutex is acquired successfully, enter the critical section
+  // - if acquiring mutex fails, push current thread into block list and
+  // context switch to the scheduler thread
 
-        // - use the built-in test-and-set atomic function to test the mutex
-        // - if the mutex is acquired successfully, enter the critical section
-        // - if acquiring mutex fails, push current thread into block list and
-        // context switch to the scheduler thread
+  // YOUR CODE HERE
+  if(__sync_lock_test_and_set(&mutex->locked, 1)) {
+    current->status = BLOCKED;
 
-        // YOUR CODE HERE
-        return 0;
+    if(mutex->blocked_tail == NULL) {
+      mutex->blocked_head = current;
+    } else {
+      mutex->blocked_tail->runqueue_next = current;
+    }
+    mutex->blocked_tail = current;
+    current->runqueue_next = NULL;
+    
+    swapcontext(&(current->context), &scheduler_context);
+  } 
+  
+  return 0;
 };
 
 /* release the mutex lock */
@@ -177,7 +193,20 @@ int worker_mutex_unlock(worker_mutex_t *mutex) {
 	// so that they could coimpete for mutex later.
 
 	// YOUR CODE HERE
-	return 0;
+  if(mutex->blocked_head != NULL) {
+    tcb* unblocked = mutex->blocked_head;
+    mutex->blocked_head = unblocked->runqueue_next;
+    unblocked->status = READY;
+    enqueue(unblocked);
+
+    if(mutex->blocked_head == NULL) {
+      mutex->blocked_tail = NULL;
+    }
+  }
+
+  mutex->locked = 0;
+
+  return 0;
 };
 
 
@@ -298,7 +327,8 @@ static tcb* dequeue() {
   if(runqueue_head == NULL) {
     runqueue_tail = NULL;
   }
-
+  
+  thread->runqueue_next = NULL;
   return thread;
 }
 

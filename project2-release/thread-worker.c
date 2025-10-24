@@ -13,6 +13,8 @@ double avg_resp_time=0;
 
 // INITAILIZE ALL YOUR OTHER VARIABLES HERE
 // YOUR CODE HERE
+static int elapsed_quantums = 0;
+
 static worker_t latest_assigned_id = 0;
 static tcb* runqueue_head = NULL;
 static tcb* runqueue_tail = NULL;
@@ -26,7 +28,7 @@ static tcb* current = NULL;
 static int scheduler_initialized = 0;
 /* create a new thread */
 int worker_create(worker_t* thread, pthread_attr_t* attr, 
-                  void* (*function)(void*), void* arg) {
+                  void (*function)(void*), void* arg) {
 
   /*
    * void*(*function)(void*)
@@ -47,12 +49,13 @@ int worker_create(worker_t* thread, pthread_attr_t* attr,
     scheduler_initialized = 1;
 
     getcontext(&scheduler_context);
+    getcontext(&main_context);
     scheduler_context.uc_link = NULL;
     scheduler_context.uc_stack.ss_sp = malloc(SIGSTKSZ);
     scheduler_context.uc_stack.ss_size = SIGSTKSZ;
     scheduler_context.uc_stack.ss_flags = 0;
 
-    makecontext(&scheduler_context, run_scheduler, 0);
+    makecontext(&scheduler_context, schedule, 0);
 
     setup_timer();
   }
@@ -63,9 +66,13 @@ int worker_create(worker_t* thread, pthread_attr_t* attr,
   tcb* worker_tcb = (tcb*)malloc(sizeof(tcb)); 
   if(!worker_tcb) return -1;                     // TODO: assert/raise readable error?
   worker_tcb->thread_id = latest_assigned_id++;
+  worker_tcb->elapsed_time = 0;
   *thread = worker_tcb->thread_id; 
-       
-  // - create and initialize the context of this worker thread      
+
+  worker_tcb->creation_time = elapsed_quantums;
+  worker_tcb->first_run_time = -1;
+  
+  // create and initialize the context of this worker thread      
   // getcontext initializes internal fields of the gien ucontex_t struct
   // it captures the current CPU state as a starting template
   // setup proper signal masks, flags and architectture specific data
@@ -106,7 +113,10 @@ int worker_yield() {
 	// - switch from thread context to scheduler context
 
 	// YOUR CODE HERE
-  if(current == NULL) return 0;
+  if(current == NULL) {
+    swapcontext(&main_context, &scheduler_context);
+    return 0;
+  }
   current->status = READY;
   enqueue(current);
 
@@ -223,6 +233,24 @@ static void sched_psjf() {
 	// (feel free to modify arguments and return types)
 
 	// YOUR CODE HERE
+  if(current && current->status != TERMINATED && current->status != BLOCKED) {
+    current->elapsed_time += 1;
+    current->status = READY;
+    enqueue(current);
+  }
+
+  tcb* min_elapsed = find_min_elapsed();
+  if(min_elapsed == NULL) return;
+  
+  if(min_elapsed->first_run_time == -1) {
+    min_elapsed->first_run_time = elapsed_quantums;
+  }
+  remove_from_runqueue(min_elapsed);
+  
+  current = min_elapsed;
+  current->status = SCHEDULED;
+
+  swapcontext(&scheduler_context, &current->context);
 }
 
 
@@ -267,18 +295,36 @@ static void schedule() {
 	// schedule() function
 	
 	//YOUR CODE HERE
+  while(1) {
+    if(runqueue_head == NULL) {
+      swapcontext(&scheduler_context, &main_context);
+    }
 
+    total_cntx_switches++;
+    #if defined(PSJF)
+      sched_psjf();
+    #elif defined(MLFQ)
+      sched_mlfq();
+    #elif defined(CFS)
+      sched_cfs();  
+    #else
+      # error "Define one of PSJF, MLFQ, or CFS when compiling. e.g. make SCHED=MLFQ"
+    #endif
+
+    if(current != NULL && 
+       current->status == TERMINATED && 
+       current->joinable == 0) {
+      
+      tcb* prev;
+      tcb* zombie = find_tracked_thread(current->thread_id,&prev);
+      if(zombie) {
+        untrack(zombie, prev);
+        current = NULL;
+      }
+    }
+  }
 	// - invoke scheduling algorithms according to the policy (PSJF or MLFQ or CFS)
-#if defined(PSJF)
-    	sched_psjf();
-#elif defined(MLFQ)
-	sched_mlfq();
-#elif defined(CFS)
-    	sched_cfs();  
-#else
-	# error "Define one of PSJF, MLFQ, or CFS when compiling. e.g. make SCHED=MLFQ"
-#endif
-}
+
 
 
 
@@ -287,7 +333,7 @@ static void schedule() {
 void print_app_stats(void) {
 
        fprintf(stderr, "Total context switches %ld \n", tot_cntx_switches);
-       fprintf(stderr, "Average turnaround time %lf \n", avg_turn_time);
+      fprintf(stderr, "Average turnaround time %lf \n", avg_turn_time);
        fprintf(stderr, "Average response time  %lf \n", avg_resp_time);
 }
 
@@ -367,6 +413,7 @@ static void run_scheduler()  {
 // 1.1.5: setup periodic interrupts to invoke scheduler
 
 static void timer_isr() {
+  elapsed_quantums++;
   if(current != NULL) {
     swapcontext(&(current->context), &(scheduler_context));
   }
@@ -447,4 +494,52 @@ static tcb* find_tracked_thread(worker_t thread, tcb** prev_tracker) {
 	return NULL;
 }
 
+static tcb* find_min_elapsed() {
+  int min_elapsed = INT_MAX;
+  tcb* min_thread = NULL;
 
+  tcb* candidate = runqueue_head;
+  while(candidate != NULL) {
+    if(candidate->elapsed_time < min_elapsed) {
+      min_elapsed = candidate->elapsed_time;
+      min_thread = candidate;
+    }
+
+    candidate = candidate->runqueue_next;
+  }
+
+  return min_thread;
+}
+
+static void remove_from_runqueue(tcb* thread) {
+  if(runqueue_head == NULL) return;
+  
+  if(thread == runqueue_head) {
+    runqueue_head = runqueue_head->runqueue_next;
+    if(runqueue_head == NULL) { 
+      runqueue_tail = NULL;
+    }
+    thread->runqueue_next = NULL;
+    return;
+  }
+
+  tcb* candidate = runqueue_head;
+  tcb* prev = NULL;
+
+  do {
+    if(candidate == thread) {
+      if(candidate == runqueue_tail) {
+        prev->runqueue_next = NULL;
+        runqueue_tail = prev;
+      } else {
+        prev->runqueue_next = thread->runqueue_next;
+      } 
+
+      thread->runqueue_next = NULL;
+      return;
+    } 
+
+    prev = candidate;
+    candidate = candidate->runqueue_next;
+  } while(candidate != NULL);
+}

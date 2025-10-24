@@ -3,7 +3,7 @@
 // List all group member's name:
 // username of iLab:
 // iLab Server:
-
+#define _XOPEN_SOURCE 600
 #ifndef WORKER_T_H
 #define WORKER_T_H
 
@@ -30,13 +30,14 @@
 #include <ucontext.h>
 #include <signal.h>
 #include <sys/time.h>
-
+#include <string.h>   // For memset
+#include <limits.h>   // For INT_MAX
 #define READY      0
 #define SCHEDULED  1
 #define BLOCKED    2 
 #define TERMINATED 3
 
-typedef uint worker_t;
+typedef int worker_t;
 typedef struct TCB {
   worker_t    thread_id;
   int         status;
@@ -45,7 +46,11 @@ typedef struct TCB {
   struct TCB* runqueue_next; 
   struct TCB* tracked_next;
   int         joinable;
+  int         elapsed_time;
   void*       return_val;
+
+  int         creation_time;
+  int         first_run_time;
 } tcb; 
 
 /* mutex struct definition */
@@ -63,13 +68,21 @@ typedef struct worker_mutex_t {
 // Feel free to add your own auxiliary data structures (linked list or queue etc...)
 
 // YOUR CODE HERE
-
+  static void enqueue(tcb* thread);
+  static tcb* dequeue();
+  static void track(tcb* thread);
+  static void untrack(tcb* thread, tcb* prev);
+  static tcb* find_tracked_thread(worker_t thread, tcb* *prev_tracker);
+  static void run_scheduler();
+  static void setup_timer();
+  static tcb* find_min_elapsed();
+  static void remove_from_runqueue(tcb* thread);
 
 /* Function Declarations: */
 
 /* create a new thread */
 int worker_create(worker_t * thread, pthread_attr_t * attr, void
-    *(*function)(void*), void * arg);
+    (*function)(void*), void * arg);
 
 /* give CPU pocession to other user level worker threads voluntarily */
 int worker_yield();

@@ -47,10 +47,14 @@ typedef struct TCB {
   struct TCB* tracked_next;
   int         joinable;
   int         elapsed_time;
-  void*       return_val;
+  void*       retval;
+
+  void*       (*cb)(void*);
+  void*       cb_arg;
 
   int         creation_time;
   int         first_run_time;
+  int         completion_time;
 } tcb; 
 
 /* mutex struct definition */
@@ -81,8 +85,8 @@ typedef struct worker_mutex_t {
 /* Function Declarations: */
 
 /* create a new thread */
-int worker_create(worker_t * thread, pthread_attr_t * attr, void
-    (*function)(void*), void * arg);
+int worker_create(worker_t * thread, pthread_attr_t * attr,
+    void*(*function)(void*), void * arg);
 
 /* give CPU pocession to other user level worker threads voluntarily */
 int worker_yield();
@@ -113,7 +117,7 @@ void print_app_stats(void);
 #ifdef USE_WORKERS
 #define pthread_t worker_t
 #define pthread_mutex_t worker_mutex_t
-#define pthread_create worker_create
+#define pthread_create(t, a, f, arg) worker_create(t, a, (void*(*)(void*))f, arg)
 #define pthread_exit worker_exit
 #define pthread_join worker_join
 #define pthread_mutex_init worker_mutex_init

@@ -14,6 +14,9 @@ double avg_resp_time=0;
 // INITAILIZE ALL YOUR OTHER VARIABLES HERE
 // YOUR CODE HERE
 static int elapsed_quantums = 0;
+static long completed_threads = 0;
+static long accum_turn_time = 0; 
+static long accum_resp_time = 0; 
 
 static worker_t latest_assigned_id = 0;
 static tcb* runqueue_head = NULL;
@@ -26,9 +29,12 @@ static ucontext_t scheduler_context;
 static ucontext_t main_context; 
 static tcb* current = NULL;
 static int scheduler_initialized = 0;
+static void schedule(void);
+static void store_cb_retval(void);
+
 /* create a new thread */
 int worker_create(worker_t* thread, pthread_attr_t* attr, 
-                  void (*function)(void*), void* arg) {
+                  void*(*function)(void*), void* arg) {
 
   /*
    * void*(*function)(void*)
@@ -71,6 +77,10 @@ int worker_create(worker_t* thread, pthread_attr_t* attr,
 
   worker_tcb->creation_time = elapsed_quantums;
   worker_tcb->first_run_time = -1;
+  worker_tcb->cb = function;
+  worker_tcb->cb_arg = arg;
+
+
   
   // create and initialize the context of this worker thread      
   // getcontext initializes internal fields of the gien ucontex_t struct
@@ -96,8 +106,8 @@ int worker_create(worker_t* thread, pthread_attr_t* attr,
 
   // TODO: verify if this is the right way to cast this function pointer
   makecontext(&(worker_tcb->context), 
-              (void (*)(void))function,
-              1, arg);
+              (void(*)(void))store_cb_retval,
+              0);
               
   track(worker_tcb);
   enqueue(worker_tcb);
@@ -129,9 +139,17 @@ int worker_yield() {
 void worker_exit(void *value_ptr) {
 	// - de-allocate any dynamic memory created when starting this thread
 
-  current->return_val = value_ptr;
+  current->retval = value_ptr;
   free(current->stack);            
   current->status = TERMINATED;
+  current->completion_time = elapsed_quantums;
+
+  accum_turn_time += current->completion_time - current->creation_time; 
+  accum_resp_time += current->first_run_time  - current->creation_time;
+  completed_threads++;
+
+  avg_turn_time = (double)(accum_turn_time/completed_threads) * QUANTUM;
+  avg_resp_time = (double)(accum_resp_time/completed_threads) * QUANTUM;
 
   setcontext(&scheduler_context);
 };
@@ -153,7 +171,7 @@ int worker_join(worker_t thread, void **value_ptr) {
   }
 
   if(value_ptr != NULL) {
-    *value_ptr = candidate->return_val;
+    *value_ptr = candidate->retval;
   }
 
   untrack(candidate, prev);
@@ -173,8 +191,9 @@ int worker_mutex_init(worker_mutex_t *mutex,
 
 /* aquire the mutex lock */
 int worker_mutex_lock(worker_mutex_t *mutex) {
-  // - use the built-in test-and-set atomic function to test the mutex
-  // - if the mutex is acquired successfully, enter the critical section
+  // -:149
+  // :use the built-in test-and-set atomic function to test the mutex
+  // - if the mutex is ahow me aquired successfully, enter the critical section
   // - if acquiring mutex fails, push current thread into block list and
   // context switch to the scheduler thread
 
@@ -249,8 +268,7 @@ static void sched_psjf() {
   
   current = min_elapsed;
   current->status = SCHEDULED;
-
-  swapcontext(&scheduler_context, &current->context);
+swapcontext(&scheduler_context, &current->context);
 }
 
 
@@ -289,6 +307,7 @@ static void sched_cfs(){
 
 
 /* scheduler */
+// - invoke scheduling algorithms according to the policy (PSJF or MLFQ or CFS)
 static void schedule() {
 	// - every time a timer interrupt occurs, your worker thread library 
 	// should be contexted switched from a thread context to this 
@@ -300,7 +319,7 @@ static void schedule() {
       swapcontext(&scheduler_context, &main_context);
     }
 
-    total_cntx_switches++;
+    tot_cntx_switches++;
     #if defined(PSJF)
       sched_psjf();
     #elif defined(MLFQ)
@@ -323,8 +342,7 @@ static void schedule() {
       }
     }
   }
-	// - invoke scheduling algorithms according to the policy (PSJF or MLFQ or CFS)
-
+}
 
 
 
@@ -542,4 +560,9 @@ static void remove_from_runqueue(tcb* thread) {
     prev = candidate;
     candidate = candidate->runqueue_next;
   } while(candidate != NULL);
+}
+
+static void store_cb_retval(void) {
+  void* ret = current->cb(current->cb_arg);
+  worker_exit(ret);
 }
